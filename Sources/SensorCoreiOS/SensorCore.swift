@@ -180,6 +180,32 @@ public final class SensorCore: @unchecked Sendable {
         await shared.fetchConfig()
     }
 
+    // MARK: - Device ID
+
+    /// The auto-generated device identifier used when no explicit user ID is provided.
+    ///
+    /// This UUID v4 is generated on first access and persisted in `UserDefaults`
+    /// across app launches. It serves as the fallback `user_id` for every log entry
+    /// when neither a per-call `userId` nor `defaultUserId` is set.
+    ///
+    /// ```swift
+    /// print(SensorCore.deviceId) // e.g. "A1B2C3D4-E5F6-..."
+    /// ```
+    public static var deviceId: String { SensorCoreDeviceId.id }
+
+    /// Resets the auto-generated device ID so a new one is created on next access.
+    ///
+    /// Call this on user logout if you want the next anonymous session to appear
+    /// as a new End-User in SensorCore analytics.
+    ///
+    /// ```swift
+    /// func logout() {
+    ///     SensorCore.resetDeviceId()
+    ///     SensorCore.shared.config?.defaultUserId = nil
+    /// }
+    /// ```
+    public static func resetDeviceId() { SensorCoreDeviceId.reset() }
+
     // MARK: - Private helpers
 
     /// Atomically replaces the active configuration and networking client.
@@ -194,10 +220,11 @@ public final class SensorCore: @unchecked Sendable {
         }
         #if DEBUG
         if cfg.enabled {
+            let userLabel = cfg.defaultUserId ?? "auto:\(SensorCoreDeviceId.id)"
             print("""
             [SensorCore] ✅ configured
               Host:    \(cfg.host.absoluteString)
-              User:    \(cfg.defaultUserId ?? "(none)")
+              User:    \(userLabel)
               Timeout: \(Int(cfg.timeout))s
             """)
         } else {
@@ -230,7 +257,7 @@ public final class SensorCore: @unchecked Sendable {
         // call on another thread could leave us with a mismatched pair (old client, new config).
         let (client, config) = lock.withLock { (self.client, self.config) }
         guard let client, let config else { return nil }
-        let resolvedUserId = userId ?? config.defaultUserId
+        let resolvedUserId = userId ?? config.defaultUserId ?? SensorCoreDeviceId.id
         let truncated = content.count > 5000 ? String(content.prefix(4997)) + "..." : content
         let entry = SensorCoreEntry(content: truncated, level: level, userId: resolvedUserId, metadata: metadata)
         return (entry, client)

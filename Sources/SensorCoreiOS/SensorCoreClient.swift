@@ -17,6 +17,7 @@ import Network
 /// } catch let error as SensorCoreError {
 ///     switch error {
 ///     case .rateLimited:            // server banned this client — stop retrying
+///     case .quotaExceeded:          // free-tier limit reached — upgrade to Pro
 ///     case .serverError(let code):  // e.g. 401 invalid API key, 500 server crash
 ///     case .networkError:           // timeout, no internet, etc.
 ///     case .notConfigured:          // forgot to call configure()
@@ -35,7 +36,7 @@ public enum SensorCoreError: Error, LocalizedError {
     /// that slipped past ``SensorCoreMetadataValue/init?(value:)``.
     case encodingFailed(Error)
 
-    /// The server responded with a non-2xx HTTP status code other than 429.
+    /// The server responded with a non-2xx HTTP status code other than 429 or 403.
     ///
     /// Common causes:
     /// - `401` — invalid or missing API key
@@ -55,6 +56,13 @@ public enum SensorCoreError: Error, LocalizedError {
     /// requests will be made until the app is relaunched.
     case rateLimited
 
+    /// The server returned **HTTP 403** with code `QUOTA_EXCEEDED`.
+    ///
+    /// The free-tier log limit has been reached. The SDK activates its
+    /// circuit-breaker — all future log calls are discarded for the remainder
+    /// of the app session. Upgrade to Pro at https://sensorcore.dev for unlimited logging.
+    case quotaExceeded
+
     public var errorDescription: String? {
         switch self {
         case .notConfigured:          return "SensorCore is not configured. Call SensorCore.configure(...) at app startup."
@@ -62,6 +70,7 @@ public enum SensorCoreError: Error, LocalizedError {
         case .serverError(let code):  return "Server returned HTTP \(code)"
         case .networkError(let e):    return "Network error: \(e.localizedDescription)"
         case .rateLimited:            return "SensorCore rate-limited (HTTP 429). Logging suspended for this session."
+        case .quotaExceeded:          return "SensorCore free-tier quota exceeded (HTTP 403). Upgrade to Pro at https://sensorcore.dev for unlimited logging."
         }
     }
 }
@@ -245,9 +254,10 @@ actor SensorCoreClient {
     func sendThrowing(entry: SensorCoreEntry) async throws {
         guard !_isSilenced else { throw SensorCoreError.rateLimited }
         let request = try buildRequest(entry: entry)
+        let data: Data
         let response: URLResponse
         do {
-            (_, response) = try await session.data(for: request)
+            (data, response) = try await session.data(for: request)
         } catch {
             // Persist the entry for later retry if offline buffering is enabled.
             persistence?.save([entry])
@@ -257,6 +267,10 @@ actor SensorCoreClient {
             if http.statusCode == 429 {
                 silence()
                 throw SensorCoreError.rateLimited
+            }
+            if http.statusCode == 403, Self.isQuotaExceeded(data) {
+                silence(reason: "free-tier quota exceeded (HTTP 403). Upgrade at https://sensorcore.dev")
+                throw SensorCoreError.quotaExceeded
             }
             if !(200...299).contains(http.statusCode) {
                 throw SensorCoreError.serverError(statusCode: http.statusCode)
@@ -347,11 +361,19 @@ actor SensorCoreClient {
             }
 
             do {
-                let (_, response) = try await session.data(for: request)
+                let (data, response) = try await session.data(for: request)
                 if let http = response as? HTTPURLResponse {
                     if http.statusCode == 429 {
                         silence()
                         // Preserve current + remaining un-attempted entries
+                        let remaining = pending[(index + 1)...]
+                        for remainingEntry in remaining {
+                            stillFailed.append(remainingEntry)
+                        }
+                        break
+                    }
+                    if http.statusCode == 403, Self.isQuotaExceeded(data) {
+                        silence(reason: "free-tier quota exceeded (HTTP 403). Upgrade at https://sensorcore.dev")
                         let remaining = pending[(index + 1)...]
                         for remainingEntry in remaining {
                             stillFailed.append(remainingEntry)
@@ -399,11 +421,15 @@ actor SensorCoreClient {
             return false
         }
         do {
-            let (_, response) = try await session.data(for: request)
+            let (data, response) = try await session.data(for: request)
             if let http = response as? HTTPURLResponse {
                 if http.statusCode == 429 {
                     silence()
                     return true   // signal the consumer loop to break
+                }
+                if http.statusCode == 403, Self.isQuotaExceeded(data) {
+                    silence(reason: "free-tier quota exceeded (HTTP 403). Upgrade at https://sensorcore.dev")
+                    return true   // quota exceeded — stop sending
                 }
                 if !(200...299).contains(http.statusCode) {
                     #if DEBUG
@@ -426,17 +452,29 @@ actor SensorCoreClient {
     /// Sets `_isSilenced = true`, finishes the stream (which causes the consumer
     /// Task to exit after draining), and prints a warning in DEBUG builds.
     /// This method is idempotent — calling it more than once is harmless.
-    private func silence() {
+    private func silence(reason: String = "rate limited by server (HTTP 429)") {
         _isSilenced = true
         continuation.finish()   // gracefully stops the consumer Task
 
         #if canImport(Network)
-        pathMonitor.cancel()    // stop monitoring — no point retrying if rate-limited
+        pathMonitor.cancel()    // stop monitoring — no point retrying
         #endif
 
         #if DEBUG
-        print("[SensorCore] ⚠️ HTTP 429 — rate limited by server. Logging suspended for this session.")
+        print("[SensorCore] ⚠️ \(reason). Logging suspended for this session.")
         #endif
+    }
+
+    /// Checks if a response body contains the server's `QUOTA_EXCEEDED` code.
+    ///
+    /// The server returns: `{ "error": "quota_exceeded", "code": "QUOTA_EXCEEDED" }`
+    /// We check for the `code` field to distinguish from other 403 responses.
+    private nonisolated static func isQuotaExceeded(_ data: Data) -> Bool {
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let code = json["code"] as? String else {
+            return false
+        }
+        return code == "QUOTA_EXCEEDED"
     }
 
     /// Builds a `POST /api/logs` request with the correct headers and JSON body.

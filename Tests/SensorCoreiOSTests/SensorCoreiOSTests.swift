@@ -26,6 +26,10 @@ final class SensorCoreiOSTests: XCTestCase {
         ("testPersistenceRespectsMaxCap",        testPersistenceRespectsMaxCap),
         ("testPersistenceClear",                testPersistenceClear),
         ("testPersistencePrunesExcessRetries",  testPersistencePrunesExcessRetries),
+        ("testDeviceIdIsValidUUID",             testDeviceIdIsValidUUID),
+        ("testDeviceIdIsPersistent",            testDeviceIdIsPersistent),
+        ("testDeviceIdResetGeneratesNewId",     testDeviceIdResetGeneratesNewId),
+        ("testDeviceIdUsedAsPublicAccessor",    testDeviceIdUsedAsPublicAccessor),
     ]
 
     // MARK: - SensorCoreLevel
@@ -353,5 +357,36 @@ final class SensorCoreiOSTests: XCTestCase {
         let loaded = persistence.loadPending()
         XCTAssertEqual(loaded.count, 1)
         XCTAssertEqual(loaded[0].content, "still ok")
+    }
+
+    // MARK: - Device ID
+
+    func testDeviceIdIsValidUUID() {
+        // Reset to ensure a fresh ID is generated
+        SensorCoreDeviceId.reset()
+        let id = SensorCoreDeviceId.id
+        XCTAssertNotNil(UUID(uuidString: id), "Device ID should be a valid UUID string")
+    }
+
+    func testDeviceIdIsPersistent() {
+        SensorCoreDeviceId.reset()
+        let first = SensorCoreDeviceId.id
+        let second = SensorCoreDeviceId.id
+        XCTAssertEqual(first, second, "Device ID should be the same across multiple reads")
+    }
+
+    func testDeviceIdResetGeneratesNewId() {
+        SensorCoreDeviceId.reset()
+        let first = SensorCoreDeviceId.id
+        SensorCoreDeviceId.reset()
+        let second = SensorCoreDeviceId.id
+        XCTAssertNotEqual(first, second, "Device ID should change after reset()")
+    }
+
+    func testDeviceIdUsedAsPublicAccessor() {
+        SensorCoreDeviceId.reset()
+        let directId = SensorCoreDeviceId.id
+        let publicId = SensorCore.deviceId
+        XCTAssertEqual(directId, publicId, "SensorCore.deviceId should return SensorCoreDeviceId.id")
     }
 }

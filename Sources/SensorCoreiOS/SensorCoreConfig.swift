@@ -34,6 +34,12 @@ public struct SensorCoreConfig: Sendable {
     /// You can still pass a different `userId` per-call to ``SensorCore/log(_:level:userId:metadata:)``
     /// which will override this default for that single call.
     ///
+    /// When `nil` (the default), the SDK automatically uses a persistent device-level
+    /// UUID (see ``SensorCoreDeviceId``). This ensures every log entry always has a
+    /// `user_id`, enabling user analytics even without explicit configuration.
+    ///
+    /// **Priority chain:** per-call `userId` → `defaultUserId` → auto-generated device ID.
+    ///
     /// Tip: update this whenever the user signs in or out:
     /// ```swift
     /// SensorCore.shared.config?.defaultUserId = Auth.currentUser?.id

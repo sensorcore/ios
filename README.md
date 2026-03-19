@@ -13,7 +13,7 @@ Swift Package with zero external dependencies, Swift Concurrency, and fire-and-f
 **Swift Package Manager** — add to your `Package.swift`:
 
 ```swift
-.package(url: "https://github.com/sensorcore/ios", from: "1.1.0")
+.package(url: "https://github.com/sensorcore/ios", from: "1.1.2")
 ```
 
 Or in Xcode: **File → Add Package Dependencies…** → paste the repo URL.
@@ -45,7 +45,7 @@ do {
 |-----------|------|---------|-------------|
 | `apiKey` | `String` | — | Your project API key |
 | `host` | `URL` | `api.sensorcore.dev` | SensorCore server URL (rarely needed) |
-| `defaultUserId` | `String?` | `nil` | Auto-attached user ID for every log |
+| `defaultUserId` | `String?` | `nil` | User ID for every log (auto-generated device ID used when `nil`) |
 | `enabled` | `Bool` | `true` | Set `false` to silence all logs (e.g. SwiftUI Previews) |
 | `timeout` | `TimeInterval` | `10` | Network request timeout in seconds |
 | `persistFailedLogs` | `Bool` | `true` | Save failed logs to disk for auto-retry |
@@ -65,6 +65,31 @@ SensorCore.configure(
     pendingLogMaxAge: 86400                // drop entries older than 24h
 )
 ```
+
+## Automatic User Tracking
+
+The SDK **always** attaches a `user_id` to every log — even if you never set one.
+
+**Priority chain:**
+
+```
+per-call userId  →  config.defaultUserId  →  auto-generated device ID
+```
+
+When no explicit user ID is provided, the SDK generates a UUID v4 on first launch
+and persists it in `UserDefaults`. This ID survives app relaunches but is reset on
+app reinstall — the correct semantic for anonymous device tracking.
+
+```swift
+// Read the auto-generated device ID
+let id = SensorCore.deviceId  // e.g. "A1B2C3D4-E5F6-..."
+
+// Reset on logout (next anonymous session = new End-User)
+SensorCore.resetDeviceId()
+```
+
+This ensures all 21 analytics tools (cohort analysis, anomaly detection, user flows, etc.)
+work out of the box, even for apps that don't have user accounts.
 
 ## Log Levels
 
